@@ -1,44 +1,29 @@
 #include "BLEValueWriter.h"
 
 #include <NimBLEDevice.h>
-#include <functional>
+#include <algorithm>
+#include <cstring>
+#include <new>
+#include "config.h"
 #include "logger.h"
 #include "utils.h"
-#include "config.h"
 #include "xbox/XboxVibrationsCommand.h"
 
-#ifndef BLE_CONTROLL_SEND_DATA_TASK_SIZE
-#define BLE_CONTROLL_SEND_DATA_TASK_SIZE 3*1024
-#endif
-
 constexpr size_t MAX_CAPACITY = CONFIG_BT_BLEGC_WRITER_BUFFER_MAX_CAPACITY;
-constexpr size_t INIT_CAPACITY = 8;
 
 template <typename T>
 BLEValueWriter<T>::BLEValueWriter()
-    : _pChar(nullptr), _sendDataTask(nullptr), _storeMutex(nullptr), _store() {
-  _store.capacity = INIT_CAPACITY;
-  _store.pBuffer = new uint8_t[_store.capacity];
-  _store.pSendBuffer = new uint8_t[_store.capacity];
-
-  _storeMutex = xSemaphoreCreateMutex();
-  configASSERT(_storeMutex);
-  xTaskCreate(_sendDataFn, "bleConSendData", BLE_CONTROLL_SEND_DATA_TASK_SIZE, this, 0, &_sendDataTask);
-  configASSERT(_sendDataTask);
+    : _pChar(nullptr), _mutexBuffer(), _mutex(nullptr), _inlineBuffer(), _pBuffer(_inlineBuffer),
+      _capacity(sizeof(_inlineBuffer)) {
+  _mutex = xSemaphoreCreateMutexStatic(&_mutexBuffer);  // no heap, safe in global constructors
 }
+
 template <typename T>
 BLEValueWriter<T>::~BLEValueWriter() {
-  if (_sendDataTask != nullptr) {
-    vTaskDelete(_sendDataTask);
-    _sendDataTask = nullptr;
+  if (_pBuffer != _inlineBuffer) {
+    delete[] _pBuffer;
   }
-  if (_storeMutex != nullptr) {
-    vSemaphoreDelete(_storeMutex);
-    _storeMutex = nullptr;
-  }
-
-  delete[] _store.pBuffer;
-  delete[] _store.pSendBuffer;
+  vSemaphoreDelete(_mutex);
 }
 
 template <typename T>
@@ -47,48 +32,69 @@ bool BLEValueWriter<T>::init(NimBLERemoteCharacteristic* pChar) {
     return false;
   }
 
-  if (!pChar->canWrite()) {
+  if (!pChar->canWrite() && !pChar->canWriteNoResponse()) {
     BLEGC_LOGE("Characteristic not able to write. %s", blegc::remoteCharToStr(pChar).c_str());
     return false;
   }
 
+  xSemaphoreTake(_mutex, portMAX_DELAY);
   _pChar = pChar;
-
+  xSemaphoreGive(_mutex);
   return true;
 }
 
 template <typename T>
+void BLEValueWriter<T>::reset() {
+  xSemaphoreTake(_mutex, portMAX_DELAY);
+  _pChar = nullptr;
+  xSemaphoreGive(_mutex);
+}
+
+template <typename T>
 void BLEValueWriter<T>::write(T& cmd) {
-  configASSERT(xSemaphoreTake(_storeMutex, portMAX_DELAY));
-  size_t used;
+  xSemaphoreTake(_mutex, portMAX_DELAY);
+
+  if (!_pChar) {
+    xSemaphoreGive(_mutex);
+    BLEGC_LOGD("Controller not connected, write skipped");
+    return;
+  }
+
+  size_t used = 0;
   BLEEncodeResult result;
-  while ((result = cmd.encode(used, _store.pBuffer, _store.capacity)) == BLEEncodeResult::BufferTooShort &&
-         _store.capacity < MAX_CAPACITY) {
-    delete[] _store.pBuffer;
-    delete[] _store.pSendBuffer;
-    _store.capacity = min(_store.capacity * 2, MAX_CAPACITY);
-    _store.pBuffer = new uint8_t[_store.capacity];
-    _store.pSendBuffer = new uint8_t[_store.capacity];
-  }
-
-  _store.used = result == BLEEncodeResult::Success ? used : 0;
-
-#if CONFIG_BT_BLEGC_LOG_BUFFER_ENABLED
-  if (result == BLEEncodeResult::Success) {
-    if (cmd.reportDataCap < _store.used) {
-      cmd.reportData = std::make_shared<uint8_t[]>(_store.used);
-      cmd.reportDataCap = _store.used;
+  while ((result = cmd.encode(used, _pBuffer, _capacity)) == BLEEncodeResult::BufferTooShort &&
+         _capacity < MAX_CAPACITY) {
+    const size_t newCapacity = std::min(_capacity * 2, MAX_CAPACITY);
+    auto* pNew = new (std::nothrow) uint8_t[newCapacity];
+    if (!pNew) {
+      break;
     }
-
-    cmd.reportDataLen = _store.used;
-    memcpy(cmd.reportData.get(), _store.pBuffer, _store.used);
+    if (_pBuffer != _inlineBuffer) {
+      delete[] _pBuffer;
+    }
+    _pBuffer = pNew;
+    _capacity = newCapacity;
   }
+
+  bool sent = false;
+  if (result == BLEEncodeResult::Success && used > 0 && used <= _capacity) {
+#if CONFIG_BT_BLEGC_LOG_BUFFER_ENABLED
+    cmd.reportData = std::shared_ptr<uint8_t[]>(new uint8_t[used]);
+    cmd.reportDataLen = used;
+    cmd.reportDataCap = used;
+    memcpy(cmd.reportData.get(), _pBuffer, used);
 #endif
-  configASSERT(xSemaphoreGive(_storeMutex));
+    // write without response: queued by NimBLE, does not wait for the peer
+    sent = _pChar->writeValue(_pBuffer, used, false);
+  }
+
+  xSemaphoreGive(_mutex);
 
   switch (result) {
     case BLEEncodeResult::Success:
-      xTaskNotifyGive(_sendDataTask);
+      if (!sent) {
+        BLEGC_LOGW("Write failed");
+      }
       break;
     case BLEEncodeResult::InvalidValue:
       BLEGC_LOGE("Encoding failed, invalid value");
@@ -96,38 +102,6 @@ void BLEValueWriter<T>::write(T& cmd) {
     case BLEEncodeResult::BufferTooShort:
       BLEGC_LOGE("Encoding failed, buffer too short");
       break;
-  }
-}
-
-template <typename T>
-void BLEValueWriter<T>::_sendDataFn(void* pvParameters) {
-  auto* self = static_cast<BLEValueWriter*>(pvParameters);
-
-  while (true) {
-    ulTaskNotifyTake(pdFALSE, portMAX_DELAY);
-
-    configASSERT(xSemaphoreTake(self->_storeMutex, portMAX_DELAY));
-
-    uint8_t* tmp = self->_store.pSendBuffer;
-    self->_store.pSendBuffer = self->_store.pBuffer;
-    self->_store.pBuffer = tmp;
-
-    auto used = self->_store.used;
-    auto shouldSend = self->_store.used > 0 && self->_store.used <= self->_store.capacity;
-    configASSERT(xSemaphoreGive(self->_storeMutex));
-
-    if (!shouldSend) {
-      continue;
-    }
-
-    if (!self->_pChar) {
-      BLEGC_LOGD("Writer not initialized, sending data aborted");
-      continue;
-    }
-
-    BLEGC_LOGV("Writing value. %s", blegc::remoteCharToStr(self->_pChar).c_str());
-
-    self->_pChar->writeValue(self->_store.pSendBuffer, used);
   }
 }
 

@@ -1,7 +1,6 @@
 #include "SteamController.h"
 
 #include <NimBLEDevice.h>
-#include <bitset>
 #include "BLEValueReceiver.h"
 #include "utils.h"
 
@@ -16,13 +15,11 @@
 #define ID_GYRO_MODE 0x30
 
 // clang-format off
-static  constexpr uint8_t clearMappingsCmd[] = {
+static constexpr uint8_t clearMappingsCmd[] = {
   0xc0, CMD_CLEAR_MAPPINGS, // Command
   0x01                      // Command Len
 };
-// clang-format on
 
-// clang-format off
 static constexpr uint8_t disableLizardModeCmd[] = {
   0xc0, CMD_WRITE_REGISTER,   // Command
   0x0f,                       // Command Len
@@ -34,8 +31,8 @@ static constexpr uint8_t disableLizardModeCmd[] = {
 };
 // clang-format on
 
-static const std::string settingsSvcUUID = "100f6c32-1735-4313-b402-38567131e5f3";
-static const std::string settingsCharUUID = "100f6c34-1735-4313-b402-38567131e5f3";
+static const char* settingsSvcUUID = "100f6c32-1735-4313-b402-38567131e5f3";
+static const char* settingsCharUUID = "100f6c34-1735-4313-b402-38567131e5f3";
 
 using namespace blegc;
 
@@ -47,7 +44,13 @@ bool SteamController::isSupported(const NimBLEAdvertisedDevice* pAdvertisedDevic
 }
 
 bool SteamController::init() {
-  const auto* pSettingsChar = findWritableCharacteristic(_pClient, settingsSvcUUID, settingsCharUUID);
+  auto* pClient = getClient();
+  if (!pClient) {
+    return false;
+  }
+
+  const auto* pSettingsChar =
+      findWritableCharacteristic(pClient, NimBLEUUID(settingsSvcUUID), NimBLEUUID(settingsCharUUID));
   if (!pSettingsChar) {
     return false;
   }
@@ -60,11 +63,12 @@ bool SteamController::init() {
     return false;
   }
 
-  auto* pControlsChar = findNotifiableCharacteristic(_pClient, hidSvcUUID, inputReportChrUUID, 2);
+  auto* pControlsChar = findNotifiableCharacteristic(pClient, hidSvcUUID, inputReportChrUUID, 2);
 
   return BLEValueReceiver::init(pControlsChar);
 }
 
 bool SteamController::deinit() {
+  BLEValueReceiver::reset();
   return true;
 }

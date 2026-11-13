@@ -2,13 +2,16 @@
 
 #include <NimBLEDevice.h>
 #include <atomic>
-#include <memory>
+#include <cstdint>
 #include "BLEDeviceInfo.h"
 
 class BLEAbstractController {
  public:
-  virtual ~BLEAbstractController() = default;
   explicit BLEAbstractController(const NimBLEAddress& allowedAddress);
+  virtual ~BLEAbstractController() = default;
+
+  BLEAbstractController(const BLEAbstractController&) = delete;
+  BLEAbstractController& operator=(const BLEAbstractController&) = delete;
 
   void begin();
   void end();
@@ -31,13 +34,13 @@ class BLEAbstractController {
 
   NimBLEClient* getClient() const;
   void setClient(NimBLEClient* pClient);
-  bool tryAllocate(NimBLEAddress address);
+  bool tryAllocate(const NimBLEAddress& address);
   bool tryDeallocate();
   bool isAllocated() const;
   void markCompletedDeregistration();
   void markConnecting();
   void markConnected();
-  void markDisconnected();
+  ConnectionState markDisconnected();  // returns the previous state
   bool isPendingDeregistration() const;
   bool hidInit();
 
@@ -50,15 +53,14 @@ class BLEAbstractController {
   virtual bool deinit() = 0;
 
   static uint64_t _encodeAddress(const NimBLEAddress& address);
-  static NimBLEAddress _decodeAddress(const uint64_t& address);
+  static NimBLEAddress _decodeAddress(uint64_t address);
   void _readDeviceInfo();
 
-  std::atomic_bool _pendingDeregistration;
-  std::atomic_uint64_t _address;
-  NimBLEClient* _pClient;
-
-  ConnectionState _connectionState;
-  NimBLEAddress _lastAddress;
+  std::atomic_bool _pendingDeregistration{false};
+  std::atomic<uint64_t> _address{0};
+  std::atomic<NimBLEClient*> _pClient{nullptr};
+  std::atomic<ConnectionState> _connectionState{ConnectionState::Disconnected};
+  std::atomic<uint64_t> _lastAddress{0};
   NimBLEAddress _allowedAddress;
   BLEDeviceInfo _deviceInfo;
 };

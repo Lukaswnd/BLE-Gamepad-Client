@@ -30,9 +30,8 @@ void writeProperties(std::string& out, const uint8_t p, const std::string& sep) 
   if (p & BLE_GATT_CHR_PROP_EXTENDED) { out += "hasExtendedProps"; out += sep; }
   // clang-format on
 
-  auto pos = out.rfind(sep);
-  if (pos == out.size() - sep.length()) {
-    out.erase(pos);
+  if (out.size() >= sep.size() && out.compare(out.size() - sep.size(), sep.size(), sep) == 0) {
+    out.erase(out.size() - sep.size());
   }
 }
 
@@ -68,10 +67,12 @@ bool discoverAttributes(NimBLEClient* pClient) {
     return false;
   }
 
-  for (auto& pService : pClient->getServices(false)) {
-    BLEGC_LOGD("Discovered %s", remoteSvcToStr(pService).c_str());
-    for (auto& pChar : pService->getCharacteristics(false)) {
-      BLEGC_LOGD("Discovered %s", remoteCharToStr(pChar).c_str());
+  if (logEnabled(ESP_LOG_DEBUG)) {
+    for (auto& pService : pClient->getServices(false)) {
+      BLEGC_LOGD("Discovered %s", remoteSvcToStr(pService).c_str());
+      for (auto& pChar : pService->getCharacteristics(false)) {
+        BLEGC_LOGD("Discovered %s", remoteCharToStr(pChar).c_str());
+      }
     }
   }
   return true;
@@ -82,11 +83,9 @@ NimBLERemoteCharacteristic* findCharacteristic(NimBLEClient* pClient,
                                                const NimBLEUUID& characteristicUUID,
                                                const uint8_t properties,
                                                const uint8_t idx) {
-  std::string propStr;
-  writeProperties(propStr, properties, ", ");
-  BLEGC_LOGD("Looking up for characteristic, service uuid: %s, characteristic uuid: %s, properties: [%s], idx: %d.",
-             std::string(serviceUUID).c_str(),
-             isNull(characteristicUUID) ? "null" : std::string(characteristicUUID).c_str(), propStr.c_str(), idx);
+  if (!pClient) {
+    return nullptr;
+  }
 
   auto* pService = pClient->getService(serviceUUID);
   if (!pService) {
@@ -94,7 +93,7 @@ NimBLERemoteCharacteristic* findCharacteristic(NimBLEClient* pClient,
     return nullptr;
   }
 
-  unsigned int _idx = idx;
+  unsigned int remaining = idx;
 
   auto characteristics = pService->getCharacteristics(false);
   if (characteristics.empty()) {
@@ -110,17 +109,16 @@ NimBLERemoteCharacteristic* findCharacteristic(NimBLEClient* pClient,
       continue;
     }
 
-    if (_idx-- != 0) {
+    if (remaining-- != 0) {
       continue;
     }
 
     return pChar;
   }
 
-  // TODO change this to Debug log & log error in client methods
-  BLEGC_LOGE("Characteristic not found, service uuid: %s, characteristic uuid: %s, properties: [%s], idx: %d.",
+  BLEGC_LOGE("Characteristic not found, service uuid: %s, characteristic uuid: %s, properties: 0x%02x, idx: %d.",
              std::string(serviceUUID).c_str(),
-             isNull(characteristicUUID) ? "null" : std::string(characteristicUUID).c_str(), propStr.c_str(), idx);
+             isNull(characteristicUUID) ? "null" : std::string(characteristicUUID).c_str(), properties, idx);
 
   return nullptr;
 }
@@ -165,10 +163,12 @@ std::string getShortenedName(const NimBLEAdvertisedDevice* pAdvertisedDevice) {
 }
 
 uint16_t getManufacturerId(const NimBLEAdvertisedDevice* pAdvertisedDevice) {
-  auto mfgData = pAdvertisedDevice->getManufacturerData();
-  configASSERT(mfgData.size() >= 2);
-  uint16_t manufacturerId = (mfgData[1] << 8) + mfgData[0];  // low endian to native endian conversion
-  return manufacturerId;
+  // Advertising data comes from arbitrary nearby devices: never assert on it.
+  const auto mfgData = pAdvertisedDevice->getManufacturerData();
+  if (mfgData.size() < 2) {
+    return 0xFFFF;  // reserved / invalid company id
+  }
+  return static_cast<uint16_t>((static_cast<uint8_t>(mfgData[1]) << 8) | static_cast<uint8_t>(mfgData[0]));
 }
 
 }  // namespace blegc

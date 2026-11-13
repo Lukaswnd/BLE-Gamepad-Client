@@ -1,6 +1,8 @@
 #pragma once
 
 #include <NimBLEDevice.h>
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
 
 template <typename T>
 class BLEValueWriter {
@@ -8,26 +10,26 @@ class BLEValueWriter {
   BLEValueWriter();
   virtual ~BLEValueWriter();
 
- /**
-  * @brief Send the command to the connected controller.
-  * @param cmd Command to send.
-  */
+  BLEValueWriter(const BLEValueWriter&) = delete;
+  BLEValueWriter& operator=(const BLEValueWriter&) = delete;
+
+  /**
+   * @brief Send the command to the connected controller. Non-blocking (write without response).
+   * Ignored if the controller is not connected.
+   * @param cmd Command to send.
+   */
   void write(T& cmd);
 
  protected:
   bool init(NimBLERemoteCharacteristic* pChar);
+  /// Must be called before the client is deleted.
+  void reset();
 
  private:
-  struct Store {
-    uint8_t* pBuffer{};
-    uint8_t* pSendBuffer{};
-    size_t used{};
-    size_t capacity{};
-  };
-  static void _sendDataFn(void* pvParameters);
-
   NimBLERemoteCharacteristic* _pChar;
-  TaskHandle_t _sendDataTask;
-  SemaphoreHandle_t _storeMutex;
-  Store _store;
+  StaticSemaphore_t _mutexBuffer;
+  SemaphoreHandle_t _mutex;
+  uint8_t _inlineBuffer[16];
+  uint8_t* _pBuffer;
+  size_t _capacity;
 };

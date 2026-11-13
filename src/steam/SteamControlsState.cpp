@@ -1,7 +1,6 @@
 #include "SteamControlsState.h"
 
 #include <NimBLEDevice.h>
-#include <bitset>
 #include "logger.h"
 
 // Sources
@@ -18,22 +17,18 @@
 
 constexpr size_t controlsDataLen = 19;
 
+namespace {
+
 inline uint16_t make_uint16(const uint8_t lsb, const uint8_t msb) {
-  uint16_t val = msb;
-  val <<= 8;
-  val += lsb;
-  return val;
+  return static_cast<uint16_t>((msb << 8) | lsb);
 }
 
 inline int16_t make_int16(const uint8_t lsb, const uint8_t msb) {
-  int16_t val = msb;
-  val <<= 8;
-  val += lsb;
-  return val;
+  return static_cast<int16_t>(make_uint16(lsb, msb));
 }
 
 inline bool decodeButton(uint8_t byte, int bit) {
-  return byte & 1 << bit;
+  return (byte & (1 << bit)) != 0;
 }
 
 inline float decodePad(const uint8_t lsb, const uint8_t msb) {
@@ -44,6 +39,8 @@ inline float decodeTrigger(const uint8_t b) {
   return static_cast<float>(b) / UINT8_MAX;
 }
 
+}  // namespace
+
 BLEDecodeResult SteamControlsState::decode(uint8_t data[], size_t dataLen) {
   if (dataLen != controlsDataLen) {
     return BLEDecodeResult::InvalidReport;
@@ -53,14 +50,14 @@ BLEDecodeResult SteamControlsState::decode(uint8_t data[], size_t dataLen) {
     return BLEDecodeResult::NotSupported;
   }
 
-  if (data[1] & 0x0f != REPORT_TYPE_INPUT) {
+  if ((data[1] & 0x0f) != REPORT_TYPE_INPUT) {
     return BLEDecodeResult::NotSupported;
   }
 
   const auto contentInfo = make_uint16(data[1], data[2]);
 
-  auto offset = 3;
-  if (contentInfo & CONTAINS_BUTTONS_DATA) {
+  size_t offset = 3;
+  if ((contentInfo & CONTAINS_BUTTONS_DATA) && offset + 3 <= dataLen) {
     const uint8_t byte0 = data[offset];
     this->rightTriggerButton = decodeButton(byte0, 0);
     this->leftTriggerButton = decodeButton(byte0, 1);
@@ -72,7 +69,6 @@ BLEDecodeResult SteamControlsState::decode(uint8_t data[], size_t dataLen) {
     this->buttonA = decodeButton(byte0, 7);
 
     const uint8_t byte1 = data[offset + 1];
-
     this->dpadUp = decodeButton(byte1, 0);
     this->dpadRight = decodeButton(byte1, 1);
     this->dpadLeft = decodeButton(byte1, 2);
@@ -92,25 +88,25 @@ BLEDecodeResult SteamControlsState::decode(uint8_t data[], size_t dataLen) {
     offset += 3;
   }
 
-  if (contentInfo & CONTAINS_TRIGGERS_DATA) {
+  if ((contentInfo & CONTAINS_TRIGGERS_DATA) && offset + 2 <= dataLen) {
     this->leftTrigger = decodeTrigger(data[offset]);
     this->rightTrigger = decodeTrigger(data[offset + 1]);
     offset += 2;
   }
 
-  if (contentInfo & CONTAINS_THUMBSTICK_DATA) {
+  if ((contentInfo & CONTAINS_THUMBSTICK_DATA) && offset + 4 <= dataLen) {
     this->stickX = decodePad(data[offset], data[offset + 1]);
     this->stickY = decodePad(data[offset + 2], data[offset + 3]);
     offset += 4;
   }
 
-  if (contentInfo & CONTAINS_LEFT_PAD_DATA) {
+  if ((contentInfo & CONTAINS_LEFT_PAD_DATA) && offset + 4 <= dataLen) {
     this->leftPadX = decodePad(data[offset], data[offset + 1]);
     this->leftPadY = decodePad(data[offset + 2], data[offset + 3]);
     offset += 4;
   }
 
-  if (contentInfo & CONTAINS_RIGHT_PAD_DATA) {
+  if ((contentInfo & CONTAINS_RIGHT_PAD_DATA) && offset + 4 <= dataLen) {
     this->rightPadX = decodePad(data[offset], data[offset + 1]);
     this->rightPadY = decodePad(data[offset + 2], data[offset + 3]);
     offset += 4;
@@ -155,6 +151,7 @@ bool SteamControlsState::operator==(const SteamControlsState& rhs) const {
     this->steamButton == rhs.steamButton;
   // clang-format on
 }
+
 bool SteamControlsState::operator!=(const SteamControlsState& rhs) const {
   return !(*this == rhs);
 }

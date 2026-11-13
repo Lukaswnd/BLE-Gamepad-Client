@@ -1,16 +1,21 @@
 #pragma once
-#include <BLEAutoScan.h>
-#include <BLEBaseController.h>
+
+#include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
+#include <freertos/task.h>
+#include "messages.h"
 
+/// Single task that runs every user callback (connection, scan and value callbacks).
 class BLEUserCallbackRunner {
-  public:
-  BLEUserCallbackRunner(BLEAutoScan& autoScan, QueueHandle_t& userCallbackQueue);
-  ~BLEUserCallbackRunner();
- private:
-  static void _userCallbackQueueConsumerTaskFn(void* pvParameters);
+ public:
+  BLEUserCallbackRunner() = delete;
 
-  QueueHandle_t& _userCallbackQueue;
-  TaskHandle_t _userCallbackQueueConsumerTask;
-  BLEAutoScan& _autoScan;
+  static bool start();
+  static bool post(const BLEUserCallback& msg, TickType_t wait);
+
+ private:
+  static void _taskFn(void* pvParameters);
+
+  static QueueHandle_t _queue;
+  static TaskHandle_t _task;
 };

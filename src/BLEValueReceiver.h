@@ -1,16 +1,28 @@
 #pragma once
 
 #include <NimBLEDevice.h>
+#include <freertos/FreeRTOS.h>
+#include <atomic>
 #include <functional>
 
 template <typename T>
 using OnValueChanged = std::function<void(T& value)>;
 
+/// Non-template base so the single callback task can dispatch value callbacks of any type.
+class BLEValueReceiverBase {
+ public:
+  virtual ~BLEValueReceiverBase() = default;
+  friend class BLEUserCallbackRunner;
+
+ protected:
+  virtual void _dispatchValueChanged() = 0;
+};
+
 template <typename T>
-class BLEValueReceiver {
+class BLEValueReceiver : public BLEValueReceiverBase {
  public:
   BLEValueReceiver();
-  virtual ~BLEValueReceiver();
+  ~BLEValueReceiver() override = default;
 
   /**
    * @brief Read the latest value from the connected controller.
@@ -26,17 +38,16 @@ class BLEValueReceiver {
 
  protected:
   bool init(NimBLERemoteCharacteristic* pChar);
+  /// Resets the stored value to defaults (fail-safe on disconnect).
+  void reset();
+  void _dispatchValueChanged() override;
 
  private:
-  struct Store {
-    T value{};
-  };
-  static void _callbackTaskFn(void* pvParameters);
   void _handleNotify(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t dataLen, bool isNotify);
 
-  TaskHandle_t _callbackTask;
-  SemaphoreHandle_t _storeMutex;
-  Store _store;
-  OnValueChanged<T> _onValueChangedCallback;
-  bool _onValueChangedCallbackSet;
+  mutable portMUX_TYPE _mux = portMUX_INITIALIZER_UNLOCKED;
+  T _value{};
+  OnValueChanged<T> _onValueChangedCallback{};
+  std::atomic_bool _callbackSet{false};
+  std::atomic_bool _callbackPending{false};
 };

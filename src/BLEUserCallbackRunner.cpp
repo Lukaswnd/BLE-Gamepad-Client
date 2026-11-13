@@ -1,60 +1,75 @@
 #include "BLEUserCallbackRunner.h"
 
+#include "BLEAbstractController.h"
+#include "BLEAutoScan.h"
+#include "BLEInternal.h"
+#include "BLEValueReceiver.h"
+#include "config.h"
 #include "logger.h"
 
-#ifndef BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE
-#define BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE 3*1024
-#endif
+QueueHandle_t BLEUserCallbackRunner::_queue = nullptr;
+TaskHandle_t BLEUserCallbackRunner::_task = nullptr;
 
-BLEUserCallbackRunner::BLEUserCallbackRunner(BLEAutoScan& autoScan, QueueHandle_t& userCallbackQueue)
-    : _userCallbackQueue(userCallbackQueue), _userCallbackQueueConsumerTask(nullptr), _autoScan(autoScan) {
-  _userCallbackQueue = xQueueCreate(10, sizeof(BLEUserCallback));
-  configASSERT(_userCallbackQueue);
-
-  xTaskCreate(_userCallbackQueueConsumerTaskFn, "bleConUsrCbQ", BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE, this, 0,
-              &_userCallbackQueueConsumerTask);
-  configASSERT(_userCallbackQueueConsumerTask);
-}
-BLEUserCallbackRunner::~BLEUserCallbackRunner() {
-  if (_userCallbackQueueConsumerTask != nullptr) {
-    vTaskDelete(_userCallbackQueueConsumerTask);
-    _userCallbackQueueConsumerTask = nullptr;
+bool BLEUserCallbackRunner::start() {
+  if (_queue) {
+    return true;
   }
 
-  if (_userCallbackQueue != nullptr) {
-    vQueueDelete(_userCallbackQueue);
-    _userCallbackQueue = nullptr;
+  _queue = xQueueCreate(CONFIG_BT_BLEGC_CALLBACK_QUEUE_LEN, sizeof(BLEUserCallback));
+  if (!_queue) {
+    return false;
   }
+
+  if (xTaskCreate(_taskFn, "blegcCb", CONFIG_BT_BLEGC_CALLBACK_TASK_STACK_SIZE, nullptr,
+                  CONFIG_BT_BLEGC_CALLBACK_TASK_PRIORITY, &_task) != pdPASS) {
+    vQueueDelete(_queue);
+    _queue = nullptr;
+    return false;
+  }
+
+  return true;
 }
 
-void BLEUserCallbackRunner::_userCallbackQueueConsumerTaskFn(void* pvParameters) {
-  auto* self = static_cast<BLEUserCallbackRunner*>(pvParameters);
+bool BLEUserCallbackRunner::post(const BLEUserCallback& msg, const TickType_t wait) {
+  if (!_queue) {
+    return false;
+  }
 
-  while (true) {
+  if (xQueueSend(_queue, &msg, wait) != pdTRUE) {
+    BLEGC_LOGW("User callback queue full, callback %d dropped", static_cast<int>(msg.kind));
+    return false;
+  }
+  return true;
+}
+
+void BLEUserCallbackRunner::_taskFn(void*) {
+  for (;;) {
     BLEUserCallback msg{};
-    if (xQueueReceive(self->_userCallbackQueue, &msg, portMAX_DELAY) != pdTRUE) {
-      BLEGC_LOGE("Failed to receive user callback message");
-      return;
+    if (xQueueReceive(_queue, &msg, portMAX_DELAY) != pdTRUE) {
+      continue;
     }
 
     switch (msg.kind) {
       case BLEUserCallbackKind::ControllerConnecting:
-        msg.pCtrl->callOnConnecting();
+        if (msg.pCtrl) msg.pCtrl->callOnConnecting();
         break;
       case BLEUserCallbackKind::ControllerConnectionFailed:
-        msg.pCtrl->callOnConnectionFailed();
+        if (msg.pCtrl) msg.pCtrl->callOnConnectionFailed();
         break;
       case BLEUserCallbackKind::ControllerConnected:
-        msg.pCtrl->callOnConnected();
+        if (msg.pCtrl) msg.pCtrl->callOnConnected();
         break;
       case BLEUserCallbackKind::ControllerDisconnected:
-        msg.pCtrl->callOnDisconnected();
+        if (msg.pCtrl) msg.pCtrl->callOnDisconnected();
         break;
       case BLEUserCallbackKind::ScanStarted:
-        self->_autoScan.callOnScanStarted();
+        blegc::internal::autoScan().callOnScanStarted();
         break;
       case BLEUserCallbackKind::ScanStopped:
-        self->_autoScan.callOnScanStopped();
+        blegc::internal::autoScan().callOnScanStopped();
+        break;
+      case BLEUserCallbackKind::ValueChanged:
+        if (msg.pReceiver) msg.pReceiver->_dispatchValueChanged();
         break;
     }
   }
