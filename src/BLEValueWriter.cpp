@@ -7,6 +7,10 @@
 #include "config.h"
 #include "xbox/XboxVibrationsCommand.h"
 
+#ifndef BLE_CONTROLL_SEND_DATA_TASK_SIZE
+#define BLE_CONTROLL_SEND_DATA_TASK_SIZE 3*1024
+#endif
+
 constexpr size_t MAX_CAPACITY = CONFIG_BT_BLEGC_WRITER_BUFFER_MAX_CAPACITY;
 constexpr size_t INIT_CAPACITY = 8;
 
@@ -19,7 +23,7 @@ BLEValueWriter<T>::BLEValueWriter()
 
   _storeMutex = xSemaphoreCreateMutex();
   configASSERT(_storeMutex);
-  xTaskCreate(_sendDataFn, "_sendDataFn", 10000, this, 0, &_sendDataTask);
+  xTaskCreate(_sendDataFn, "bleConSendData", BLE_CONTROLL_SEND_DATA_TASK_SIZE, this, 0, &_sendDataTask);
   configASSERT(_sendDataTask);
 }
 template <typename T>

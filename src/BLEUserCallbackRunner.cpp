@@ -2,12 +2,16 @@
 
 #include "logger.h"
 
+#ifndef BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE
+#define BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE 3*1024
+#endif
+
 BLEUserCallbackRunner::BLEUserCallbackRunner(BLEAutoScan& autoScan, QueueHandle_t& userCallbackQueue)
     : _userCallbackQueue(userCallbackQueue), _userCallbackQueueConsumerTask(nullptr), _autoScan(autoScan) {
   _userCallbackQueue = xQueueCreate(10, sizeof(BLEUserCallback));
   configASSERT(_userCallbackQueue);
 
-  xTaskCreate(_userCallbackQueueConsumerTaskFn, "_userCallbackQueueConsumerTaskFn", 10000, this, 0,
+  xTaskCreate(_userCallbackQueueConsumerTaskFn, "bleConUsrCbQ", BLE_CONTROLLER_USER_CALLBACK_TASK_SIZE, this, 0,
               &_userCallbackQueueConsumerTask);
   configASSERT(_userCallbackQueueConsumerTask);
 }

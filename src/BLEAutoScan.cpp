@@ -6,6 +6,10 @@
 #include "messages.h"
 #include "config.h"
 
+#ifndef BLE_CONTROLLER_AUTO_SCAN_TASK_SIZE
+#define BLE_CONTROLLER_AUTO_SCAN_TASK_SIZE 4*1024
+#endif
+
 BLEAutoScan::BLEAutoScan(BLEControllerRegistry& controllerRegistry,
                          TaskHandle_t& autoScanTask,
                          QueueHandle_t& userCallbackQueue)
@@ -16,7 +20,7 @@ BLEAutoScan::BLEAutoScan(BLEControllerRegistry& controllerRegistry,
       _onScanStarted([]() {}),
       _onScanStopped([]() {}),
       _userCallbackQueue(userCallbackQueue) {
-  xTaskCreate(_autoScanTaskFn, "_autoScanTaskFn", 10000, this, 0, &_autoScanTask);
+  xTaskCreate(_autoScanTaskFn, "bleConAutoScan", BLE_CONTROLLER_AUTO_SCAN_TASK_SIZE, this, 0, &_autoScanTask);
   configASSERT(_autoScanTask);
 
   auto* pScan = NimBLEDevice::getScan();

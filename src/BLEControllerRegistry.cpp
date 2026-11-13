@@ -12,6 +12,10 @@
 #include "logger.h"
 #include "messages.h"
 
+#ifndef BLE_CONTROLLER_CONTROLLER_REGISTRY_TASK_SIZE
+#define BLE_CONTROLLER_CONTROLLER_REGISTRY_TASK_SIZE 4*1024
+#endif
+
 BLEControllerRegistry::ClientEvent::operator std::string() const {
   std::string kindStr;
   // clang-format off
@@ -40,7 +44,7 @@ BLEControllerRegistry::BLEControllerRegistry(TaskHandle_t& autoScanTask, QueueHa
   _clientEventQueue = xQueueCreate(10, sizeof(ClientEvent));
   configASSERT(_clientEventQueue);
 
-  xTaskCreatePinnedToCore(_clientEventConsumerFn, "_clientEventConsumerTask", 10000, this, 0, &_clientEventConsumerTask,
+  xTaskCreatePinnedToCore(_clientEventConsumerFn, "bleConCliEvent", BLE_CONTROLLER_CONTROLLER_REGISTRY_TASK_SIZE, this, 0, &_clientEventConsumerTask,
                           CONFIG_BT_NIMBLE_PINNED_TO_CORE);
   configASSERT(_clientEventConsumerTask);
 }

@@ -9,6 +9,11 @@
 #include "xbox/XboxBatteryState.h"
 #include "xbox/XboxControlsState.h"
 
+#ifndef BLE_CONTROLL_VALUE_CALLBACK_TASK_SIZE
+#define BLE_CONTROLL_VALUE_CALLBACK_TASK_SIZE 3*1024
+#endif
+
+
 template <typename T>
 BLEValueReceiver<T>::BLEValueReceiver()
     :
@@ -19,7 +24,7 @@ BLEValueReceiver<T>::BLEValueReceiver()
       _onValueChangedCallbackSet(false) {
   _storeMutex = xSemaphoreCreateMutex();
   configASSERT(_storeMutex);
-  xTaskCreate(_callbackTaskFn, "_callbackTask", 10000, this, 0, &_callbackTask);
+  xTaskCreate(_callbackTaskFn, "bleConValueCb", BLE_CONTROLL_VALUE_CALLBACK_TASK_SIZE, this, 0, &_callbackTask);
   configASSERT(_callbackTask);
 }
 
